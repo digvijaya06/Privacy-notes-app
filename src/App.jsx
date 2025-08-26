@@ -1,14 +1,18 @@
 import React, { useEffect, useRef, useState } from "react";
+import Navbar from "./components/Navbar";
+import Auth from "./components/Auth";
+import NotesApp from "./components/NotesApp";
+import ArchivedNotes from "./components/ArchivedNotes";
 import LockScreen from "./components/LockScreen";
 import UnlockedScreen from "./components/UnlockedScreen";
+import { saveNote, updateNote, deleteNote, getNotes } from "./db/indexedDB";
+import syncManager from "./services/syncManager";
 import {
   STORAGE_KEY,
   AUTO_LOCK_MS,
   encryptJson,
   decryptJson,
 } from "./utils/crypto";
-
-const BIOMETRIC_KEY = "privacy-notes-biometric";
 
 export default function App() {
   // LOCK STATE
@@ -17,13 +21,35 @@ export default function App() {
   const [password, setPassword] = useState("");
   const [confirmPw, setConfirmPw] = useState("");
   const [notes, setNotes] = useState([]);
-  const [input, setInput] = useState("");
-  const [tags, setTags] = useState("");
-  const [search, setSearch] = useState("");
   const [showArchived, setShowArchived] = useState(false);
+  const [user, setUser] = useState(null); // User state for authentication
+  const [darkMode, setDarkMode] = useState(true); // Dark mode state
 
   const lastActivityRef = useRef(Date.now());
   const activityHandler = () => (lastActivityRef.current = Date.now());
+
+  const handleLogin = async (u) => {
+    setUser(u);
+    // Initialize sync manager with user ID
+    syncManager.initialize(u.uid, () => {
+      console.log("Sync completed");
+    });
+
+    // Load notes from IndexedDB (offline-first)
+    const localNotes = await getNotes(password);
+    setNotes(localNotes);
+
+    // Trigger sync to get latest from Firestore
+    if (navigator.onLine) {
+      syncManager.manualSync();
+    }
+  };
+
+  const handleLogout = () => {
+    setUser(null);
+    setNotes([]);
+    syncManager.destroy();
+  };
 
   useEffect(() => {
     const payload = localStorage.getItem(STORAGE_KEY);
@@ -37,7 +63,13 @@ export default function App() {
           handleLock();
         }
       }, 5_000);
-      const handlers = ["mousemove", "keydown", "click", "scroll", "touchstart"];
+      const handlers = [
+        "mousemove",
+        "keydown",
+        "click",
+        "scroll",
+        "touchstart",
+      ];
       handlers.forEach((evt) => window.addEventListener(evt, activityHandler));
 
       return () => {
@@ -55,7 +87,6 @@ export default function App() {
 
       // First-time setup: no vault yet -> create it with empty notes
       if (!payloadStr) {
-        // Sample password for testing
         const samplePassword = "TestPassword123";
         const sampleConfirmPw = "TestPassword123";
 
@@ -74,10 +105,6 @@ export default function App() {
         setHasVault(true);
         lastActivityRef.current = Date.now();
         setConfirmPw("");
-
-        // ✅ Offer biometric enrollment after first unlock
-        setupBiometric(password);
-
         return;
       }
 
@@ -87,9 +114,6 @@ export default function App() {
       setNotes(Array.isArray(decrypted) ? decrypted : []);
       setLocked(false);
       lastActivityRef.current = Date.now();
-
-      // ✅ Refresh biometric credential
-      setupBiometric(password);
     } catch (e) {
       console.error(e);
       alert("Invalid password or corrupted vault.");
@@ -98,13 +122,41 @@ export default function App() {
 
   const handleLock = () => {
     setNotes([]);
-    setInput("");
-    setTags("");
-    setSearch("");
     setShowArchived(false);
     setLocked(true);
     setPassword("");
     setConfirmPw("");
+  };
+
+  const toggleShowArchived = () => {
+    setShowArchived((prev) => !prev);
+  };
+
+  const toggleArchive = async (id) => {
+    const note = notes.find((n) => n.id === id);
+    if (note) {
+      await updateNote(id, { archived: !note.archived }, password);
+      const updatedNotes = await getNotes(password);
+      setNotes(updatedNotes);
+    }
+  };
+
+  const handleDeleteNote = async (id) => {
+    await deleteNote(id);
+    const updatedNotes = await getNotes(password);
+    setNotes(updatedNotes);
+  };
+
+  const editNote = async (noteId, updates) => {
+    await updateNote(noteId, updates, password);
+    const updatedNotes = await getNotes(password);
+    setNotes(updatedNotes);
+  };
+
+  const addNote = async (noteData) => {
+    await saveNote(noteData, password);
+    const updatedNotes = await getNotes(password);
+    setNotes(updatedNotes);
   };
 
   const exportBackup = () => {
@@ -143,77 +195,11 @@ export default function App() {
     reader.readAsText(file);
   };
 
-  // ---------- BIOMETRIC HELPERS ----------
-
-  async function setupBiometric(masterPw) {
-    if (!window.PublicKeyCredential) return; // not supported
-
-    try {
-      const challenge = new Uint8Array(32);
-      window.crypto.getRandomValues(challenge);
-
-      const cred = await navigator.credentials.create({
-        publicKey: {
-          challenge,
-          rp: { name: "Privacy Notes" },
-          user: {
-            id: new Uint8Array([1, 2, 3, 4]),
-            name: "user@example.com",
-            displayName: "Privacy Notes User",
-          },
-          pubKeyCredParams: [{ alg: -7, type: "public-key" }],
-          authenticatorSelection: { userVerification: "required" },
-          timeout: 60000,
-          attestation: "direct",
-        },
-      });
-
-      if (cred) {
-        localStorage.setItem(BIOMETRIC_KEY, masterPw);
-        console.log("Biometric credential stored.");
-      }
-    } catch (err) {
-      console.warn("Biometric setup failed", err);
-    }
-  }
-
-  async function biometricUnlock() {
-    if (!window.PublicKeyCredential) {
-      alert("Biometrics not supported.");
-      return;
-    }
-    try {
-      const challenge = new Uint8Array(32);
-      window.crypto.getRandomValues(challenge);
-
-      const assertion = await navigator.credentials.get({
-        publicKey: {
-          challenge,
-          timeout: 60000,
-          userVerification: "required",
-        },
-      });
-
-      if (assertion) {
-        const savedPw = localStorage.getItem(BIOMETRIC_KEY);
-        if (!savedPw) {
-          alert("No biometric password stored. Unlock once with password first.");
-          return;
-        }
-        setPassword(savedPw);
-        await handleUnlock();
-      }
-    } catch (err) {
-      console.warn("Biometric unlock failed", err);
-    }
-  }
-
   if (locked) {
     return (
       <LockScreen
         hasVault={hasVault}
         onUnlock={handleUnlock}
-        onBiometric={biometricUnlock}   // ✅ Added
         password={password}
         setPassword={setPassword}
         confirmPw={confirmPw}
@@ -223,20 +209,41 @@ export default function App() {
   }
 
   return (
-    <UnlockedScreen
-      notes={notes}
-      setNotes={setNotes}
-      input={input}
-      setInput={setInput}
-      tags={tags}
-      setTags={setTags}
-      search={search}
-      setSearch={setSearch}
-      showArchived={showArchived}
-      setShowArchived={setShowArchived}
-      onLock={handleLock}
-      onExportBackup={exportBackup}
-      onImportBackup={importBackup}
-    />
+    <div
+      className={`${
+        darkMode ? "dark" : ""
+      } bg-gray-900 text-white min-h-screen`}
+    >
+      <Navbar
+        onImport={importBackup}
+        onExport={exportBackup}
+        darkMode={darkMode}
+        setDarkMode={setDarkMode}
+        showArchived={showArchived}
+        setShowArchived={setShowArchived}
+        onLogin={handleLogin}
+        onLogout={handleLogout}
+      />
+      <div className="flex flex-col items-center justify-center h-full p-4">
+        {showArchived ? (
+          <ArchivedNotes
+            archivedNotes={notes.filter((note) => note.archived)}
+            onUnarchive={toggleArchive}
+            onDelete={handleDeleteNote}
+            onEdit={editNote}
+          />
+        ) : (
+          <NotesApp
+            notes={notes}
+            onAddNote={addNote}
+            onUpdateNote={editNote}
+            onDeleteNote={handleDeleteNote}
+            onToggleArchive={toggleArchive}
+            onTogglePin={editNote}
+            showArchived={showArchived}
+          />
+        )}
+      </div>
+    </div>
   );
 }

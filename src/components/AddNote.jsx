@@ -27,6 +27,7 @@ export default function AddNote({ onSaved }) {
 
   return (
     <form onSubmit={handleSaveClick} className="mb-4 p-4 bg-white rounded-lg shadow">
+     
       <textarea
         className="w-full p-3 border rounded mb-2"
         rows={5}

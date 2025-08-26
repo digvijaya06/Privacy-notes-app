@@ -1,4 +1,4 @@
-/**
+this /**
  * ========= CRYPTO HELPERS (WebCrypto, AES-GCM, PBKDF2) =========
  */
 
@@ -10,6 +10,8 @@ export const AUTO_LOCK_MS = 5 * 60 * 1000; // 5 minutes inactivity lock
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
+
+import CryptoJS from "crypto-js"; // Ensure CryptoJS is imported
 
 // tiny utils
 const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
@@ -68,4 +70,14 @@ export async function decryptJson(payload, password) {
     fromB64(payload.ciphertext)
   );
   return JSON.parse(dec.decode(pt));
+}
+
+export function encryptData(content, password) {
+  return CryptoJS.AES.encrypt(content, password).toString();
+}
+
+// New decryptData function
+export function decryptData(encryptedContent, password) {
+  const bytes = CryptoJS.AES.decrypt(encryptedContent, password);
+  return bytes.toString(CryptoJS.enc.Utf8);
 }

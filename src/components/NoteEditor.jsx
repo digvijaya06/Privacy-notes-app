@@ -3,12 +3,21 @@ import { saveNote } from "../db/indexedDB.js";
 
 export default function NoteEditor({ addNote, password }) {
   const [content, setContent] = useState("");
+  const [saving, setSaving] = useState(false);
 
   const handleSave = async () => {
-    if (!content) return;
-    const note = await saveNote({ content }, password);
-    addNote(note);
-    setContent("");
+    if (!content.trim() || saving) return;
+
+    setSaving(true);
+    try {
+      const note = await saveNote({ content }, password);
+      addNote(note);         // update parent state
+      setContent("");        // clear editor AFTER save
+    } catch (err) {
+      console.error("Error saving note:", err);
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -21,10 +30,13 @@ export default function NoteEditor({ addNote, password }) {
         onChange={(e) => setContent(e.target.value)}
       />
       <button
-        className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+        className={`px-4 py-2 rounded text-white ${
+          saving ? "bg-gray-400" : "bg-blue-500 hover:bg-blue-600"
+        }`}
         onClick={handleSave}
+        disabled={saving}
       >
-        Save Note
+        {saving ? "Saving..." : "Save Note"}
       </button>
     </div>
   );
