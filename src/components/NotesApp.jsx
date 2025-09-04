@@ -49,9 +49,9 @@ export default function NotesApp({
 
   const filteredNotes = notes.filter((note) => {
     const matchesSearch =
-      note.text.toLowerCase().includes(search.toLowerCase()) ||
+      (note.text || '').toLowerCase().includes(search.toLowerCase()) ||
       note.tags.some((tag) =>
-        tag.toLowerCase().includes(search.toLowerCase())
+        (tag || '').toLowerCase().includes(search.toLowerCase())
       );
     if (!showArchived && note.archived) return false; // hide archived if not showing
     return matchesSearch;

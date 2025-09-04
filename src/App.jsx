@@ -1,10 +1,9 @@
 import React, { useEffect, useRef, useState } from "react";
 import Navbar from "./components/Navbar";
-import Auth from "./components/Auth";
 import NotesApp from "./components/NotesApp";
 import ArchivedNotes from "./components/ArchivedNotes";
 import LockScreen from "./components/LockScreen";
-import UnlockedScreen from "./components/UnlockedScreen";
+
 import { saveNote, updateNote, deleteNote, getNotes } from "./db/indexedDB";
 import syncManager from "./services/syncManager";
 import {
@@ -17,45 +16,27 @@ import {
 export default function App() {
   // LOCK STATE
   const [locked, setLocked] = useState(true);
-  const [hasVault, setHasVault] = useState(false);
   const [password, setPassword] = useState("");
   const [confirmPw, setConfirmPw] = useState("");
   const [notes, setNotes] = useState([]);
   const [showArchived, setShowArchived] = useState(false);
-  const [user, setUser] = useState(null); // User state for authentication
-  const [darkMode, setDarkMode] = useState(true); // Dark mode state
+  const [isNewUser, setIsNewUser] = useState(false);
+  const [darkMode, setDarkMode] = useState(true);
 
   const lastActivityRef = useRef(Date.now());
   const activityHandler = () => (lastActivityRef.current = Date.now());
 
-  const handleLogin = async (u) => {
-    setUser(u);
-    // Initialize sync manager with user ID
-    syncManager.initialize(u.uid, () => {
-      console.log("Sync completed");
-    });
-
-    // Load notes from IndexedDB (offline-first)
-    const localNotes = await getNotes(password);
-    setNotes(localNotes);
-
-    // Trigger sync to get latest from Firestore
-    if (navigator.onLine) {
-      syncManager.manualSync();
-    }
-  };
-
-  const handleLogout = () => {
-    setUser(null);
-    setNotes([]);
-    syncManager.destroy();
-  };
-
+  // check if new user (vault not created yet)
   useEffect(() => {
     const payload = localStorage.getItem(STORAGE_KEY);
-    setHasVault(!!payload);
+    if (!payload) {
+      setIsNewUser(true);
+    } else {
+      setIsNewUser(false);
+    }
   }, []);
 
+  // auto-lock
   useEffect(() => {
     if (!locked) {
       const id = setInterval(() => {
@@ -81,20 +62,18 @@ export default function App() {
     }
   }, [locked]);
 
+  // 🔑 Unlock handler
   const handleUnlock = async () => {
     try {
       const payloadStr = localStorage.getItem(STORAGE_KEY);
 
-      // First-time setup: no vault yet -> create it with empty notes
+      // First-time setup (new user)
       if (!payloadStr) {
-        const samplePassword = "TestPassword123";
-        const sampleConfirmPw = "TestPassword123";
-
-        if (samplePassword.length < 6) {
+        if (password.length < 6) {
           alert("Master password must be at least 6 characters.");
           return;
         }
-        if (samplePassword !== sampleConfirmPw) {
+        if (password !== confirmPw) {
           alert("Passwords do not match.");
           return;
         }
@@ -102,13 +81,13 @@ export default function App() {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(encrypted));
         setNotes([]);
         setLocked(false);
-        setHasVault(true);
+        setIsNewUser(false);
         lastActivityRef.current = Date.now();
         setConfirmPw("");
         return;
       }
 
-      // Existing vault -> try decrypt with entered password
+      // Existing user
       const payload = JSON.parse(payloadStr);
       const decrypted = await decryptJson(payload, password);
       setNotes(Array.isArray(decrypted) ? decrypted : []);
@@ -159,6 +138,7 @@ export default function App() {
     setNotes(updatedNotes);
   };
 
+  // Backup export
   const exportBackup = () => {
     const payloadStr = localStorage.getItem(STORAGE_KEY);
     if (!payloadStr) return alert("No vault to export.");
@@ -173,6 +153,7 @@ export default function App() {
     a.remove();
   };
 
+  // Backup import
   const importBackup = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -187,7 +168,7 @@ export default function App() {
         localStorage.setItem(STORAGE_KEY, reader.result);
         alert("Backup imported. App will lock — unlock with its password.");
         handleLock();
-        setHasVault(true);
+        setIsNewUser(false);
       } catch {
         alert("Failed to import backup.");
       }
@@ -195,25 +176,23 @@ export default function App() {
     reader.readAsText(file);
   };
 
+  // 🔒 Lock screen
   if (locked) {
     return (
       <LockScreen
-        hasVault={hasVault}
         onUnlock={handleUnlock}
         password={password}
         setPassword={setPassword}
         confirmPw={confirmPw}
         setConfirmPw={setConfirmPw}
+        isNewUser={isNewUser}
       />
     );
   }
 
+  // 📝 Main app
   return (
-    <div
-      className={`${
-        darkMode ? "dark" : ""
-      } bg-gray-900 text-white min-h-screen`}
-    >
+    <div className={`${darkMode ? "dark" : ""} bg-gray-900 text-white min-h-screen`}>
       <Navbar
         onImport={importBackup}
         onExport={exportBackup}
@@ -221,8 +200,7 @@ export default function App() {
         setDarkMode={setDarkMode}
         showArchived={showArchived}
         setShowArchived={setShowArchived}
-        onLogin={handleLogin}
-        onLogout={handleLogout}
+        onLock={handleLock}
       />
       <div className="flex flex-col items-center justify-center h-full p-4">
         {showArchived ? (

@@ -8,7 +8,7 @@ const METADATA_STORE = "metadata";
 
 export async function initDB() {
   return openDB(DB_NAME, 2, {
-    upgrade(db, oldVersion) {
+    upgrade(db) {
       if (!db.objectStoreNames.contains(NOTES_STORE)) {
         db.createObjectStore(NOTES_STORE, { keyPath: "id", autoIncrement: true });
       }
@@ -22,6 +22,8 @@ export async function initDB() {
   });
 }
 
+// ---------------- NOTES ----------------
+
 // Save note (encrypt before storing)
 export async function saveNote(note, password) {
   const db = await initDB();
@@ -29,7 +31,7 @@ export async function saveNote(note, password) {
 
   const storedNote = {
     ...note,
-    content: encrypted,
+    content: encrypted,        // encrypted string
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     pinned: note.pinned || false,
@@ -80,19 +82,31 @@ export async function updateNote(id, updates, password) {
   return updatedNote;
 }
 
-// Get all notes (decrypt with password)
+// Get all notes (decrypt if password provided)
 export async function getNotes(password) {
-  const db = await initDB();
-  const allNotes = await db.getAll(NOTES_STORE);
+  try {
+    const db = await initDB();  // ✅ same DB
+    const allNotes = await db.getAll(NOTES_STORE);
 
-  return allNotes.map((note) => {
-    try {
-      const decrypted = decryptData(note.content, password);  // ✅ use helper
-      return { ...note, content: decrypted };
-    } catch (err) {
-      return { ...note, content: "Unable to decrypt" };
+    if (password) {
+      return Promise.all(
+        allNotes.map(async (note) => {
+          try {
+            const decryptedContent = decryptData(note.content, password); // ✅ decrypt
+            return { ...note, content: decryptedContent };
+          } catch (err) {
+            console.warn("Failed to decrypt note:", err);
+            return note; // skip broken note
+          }
+        })
+      );
     }
-  });
+
+    return allNotes;
+  } catch (err) {
+    console.error("IndexedDB getNotes failed:", err);
+    return [];
+  }
 }
 
 // Delete a note
@@ -108,7 +122,7 @@ export async function deleteNote(id) {
   await db.delete(NOTES_STORE, id);
 }
 
-// --- Sync Queue ---
+// ---------------- SYNC QUEUE ----------------
 export async function addToSyncQueue(operation) {
   const db = await initDB();
   await db.put(SYNC_STORE, operation);
@@ -131,7 +145,7 @@ export async function removeFromSyncQueue(id) {
   await db.delete(SYNC_STORE, id);
 }
 
-// --- Metadata ---
+// ---------------- METADATA ----------------
 export async function setLastSyncTimestamp(timestamp) {
   const db = await initDB();
   await db.put(METADATA_STORE, { key: "lastSync", value: timestamp });
@@ -154,7 +168,7 @@ export async function getOnlineStatus() {
   return metadata ? metadata.value : false;
 }
 
-// --- Sync flag ---
+// Mark note as synced
 export async function markNoteAsSynced(noteId) {
   const db = await initDB();
   const note = await db.get(NOTES_STORE, noteId);
@@ -164,7 +178,7 @@ export async function markNoteAsSynced(noteId) {
   }
 }
 
-// --- Backup ---
+// ---------------- BACKUP ----------------
 export async function exportBackup() {
   const db = await initDB();
   const allNotes = await db.getAll(NOTES_STORE);
